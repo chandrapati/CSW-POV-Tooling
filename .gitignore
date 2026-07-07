@@ -1,0 +1,44 @@
+# Secrets and credentials - NEVER commit
+.env
+.env.local
+.env.*.local
+*.env
+api_credentials*.json
+*_credentials*.json
+*credentials*.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local data exports that may contain sensitive workload info
+snapshots/
+reports/
+*.csv
+*.xlsx
+*.docx
+*.pdf
+!framework-scope-design*.md
+!docs/**/*.docx
+!docs/**/*.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.python-version
+
+# OS / Editor
+.DS_Store
+~$*
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Temp / scratch
+tmp-*
+*.tmp
+*.bak

@@ -1,0 +1,138 @@
+# CSW POV Tooling
+
+![Visitors](https://visitor-badge.laobi.icu/badge?page_id=chandrapati.CSW-POV-Tooling&left_text=visitors)
+
+Customer-neutral, reusable tooling for Cisco Secure Workload (CSW / Tetration) proof-of-value engagements. Per-customer engagement repos (e.g. `{Customer}-CSW-POV`) use these scripts to pull data and generate reports against their own tenant, **without** mixing customer-specific artifacts into a shared codebase.
+
+> **Customer isolation policy:** This repo MUST NOT contain anything customer-specific — no hostnames, tenant IDs, scope names, IP ranges, CMDB extracts, executive briefings, or customer business data. All of that lives in the per-customer repo.
+
+## Quick start
+
+1. Clone alongside (or inside) your per-customer engagement working directory.
+
+2. Copy the credential template and fill in real values for the **target customer's tenant**. Keep this file local — `.env` is gitignored.
+
+   ```bash
+   cp .env.example .env
+   # then edit .env and set CSW_API_URL, CSW_API_KEY, CSW_API_SECRET for the tenant
+   ```
+
+3. Sanity-check connectivity and count installed agents on the cluster:
+
+   ```bash
+   python3 count_agents.py            # human-readable summary
+   python3 count_agents.py --json     # JSON, easy to pipe / grep
+   ```
+
+4. Make any other authenticated call via the generic client:
+
+   ```bash
+   python3 csw_api.py GET /openapi/v1/app_scopes
+   python3 csw_api.py GET /openapi/v1/sensors --limit 50 --offset 0
+   ```
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `csw_api.py` | HMAC-SHA256 signed client for the CSW OpenAPI (reads `.env`). |
+| `csw_helpers.py` | Shared utilities — offset pagination, sensor map (`uuid` / `ip` / `hostname`), safe-filename slugger. Imported by the report generators. |
+| `count_agents.py` | Pages `/openapi/v1/sensors` and summarises type / OS / version / enforcement. |
+| `api_test_suite.py` | Smoke-test suite for CSW OpenAPI endpoints — produces a Markdown capability matrix per API key. |
+| `cluster_snapshot.py` / `cluster_delta.py` | Snapshot the cluster state (agents · scopes · workspaces · policies · 24-h flow sample) and diff between snapshots. |
+| `download_flows.py` / `download_conversations.py` | Filtered raw-flow CSV export and ADM conversation export per workspace. |
+| `download_forensics.py` / `download_policies.py` | Forensics profiles + rules + intents export, and full per-workspace policy export with workload mapping. |
+| `risky_port_audit.py` | Audits the policies (from `download_policies.py`) for risky-port exposure on east-west paths and PCI-boundary violations. JSON findings + styled HTML report. |
+| `generate_vuln_report.py` | Queries each sensor's CVE list via `/openapi/v1/sensors/<uuid>/cves`, writes a flat CSV (one row per CVE per host) and a host-level severity rollup HTML. |
+| `generate_flow_analysis.py` | Deep flow analysis HTML — dimensionalises N flows by protocol, port (with risky-port badges), TCP performance, TLS posture, scope pairs, host pairs, processes. |
+| `generate_forensics_report.py` | Forensics report HTML from the JSON produced by `download_forensics.py`. |
+| `generate_html_report.py` / `generate_combined_report.py` | Snapshot → HTML readout and baseline+current side-by-side HTML with KPI deltas. |
+| `generate_executive_report.py` | **The deliverable.** Reads the latest snapshot, auto-discovers every companion artifact above, computes posture indicators (visibility coverage, enforcement coverage, policy maturity, blast-radius score), runs the recommendations engine, and writes CISO-grade HTML + Markdown. |
+| `query_long_lived_processes.py` | Multi-day process persistence analysis. Issues one flowsearch per day, aggregates process+host combinations, and identifies persistent vs recurring vs transient processes. |
+| `parse_enforcer_timeline.py` | Parses agent `*_csw-logs` / `tet-enforcer.log` — enforcement timeline, on-host apply latency (ms), EFE delivery gaps (min), test cutoff. No API creds. See [docs/logs-check/](docs/logs-check/). |
+| `framework-scope-design.md` / `framework-scope-design-updated.md` | Generic scope-design framework templates. |
+| `.env` | **Local only.** Tenant URL + API key + API secret. Gitignored. |
+| `.env.example` | Template showing the variables that must be set. |
+| `.gitignore` | Excludes `.env`, credential JSON, snapshots, reports, exports, and OS junk. |
+
+## Recommended workflow
+
+A typical engagement-day refresh against any tenant — produces every report needed for an
+executive readout:
+
+```bash
+# 1) capture current state (1-2 min)
+python3 cluster_snapshot.py
+
+# 2) policy + workload inventory (30 s)
+python3 download_policies.py
+
+# 3) risky-port audit using cached policies (5 s)
+python3 risky_port_audit.py --use-cache
+
+# 4) forensics config (10 s)
+python3 download_forensics.py
+
+# 5) deep flow analysis (1 min)
+python3 generate_flow_analysis.py --limit 2000 --hours 24
+
+# 6) CVE rollup (1 min)
+python3 generate_vuln_report.py
+
+# 7) optional: ADM conversations per workspace
+python3 download_conversations.py --workspace "<workspace-name>"
+
+# 8) executive HTML+MD deliverable
+python3 generate_executive_report.py --snapshot-latest \
+    --prepared-for "Customer Name" \
+    --prepared-by  "Your Team"
+
+# 9) open the deliverable
+open reports/executive-summary-$(date -u +%Y-%m-%d).html
+```
+
+### Enforcement validation (agent log bundles)
+
+After policy publish + functional test, export `*_csw-logs` from the target agent and parse offline:
+
+```bash
+python3 parse_enforcer_timeline.py /path/to/host_uuid_epoch_csw-logs.zip --year 2026
+```
+
+Write findings to `{Customer}-CSW-POV/docs/enforcement-validation/`. Full workflow: [docs/logs-check/README.md](docs/logs-check/README.md).
+
+All scripts read `.env` for credentials, paginate the OpenAPI safely, and write outputs
+to `snapshots/` (raw JSON/CSV) and `reports/` (rendered HTML/MD). Use `--help` on any
+script for the full CLI.
+
+## API key capabilities required
+
+| Capability | Used by |
+|---|---|
+| `sensor_management` | sensors, forensics, CVE rollup, long-lived processes |
+| `flow_inventory_query` | snapshot, flow analysis, conversations, flows |
+| `app_policy_management` | snapshot, policies, risky-port audit |
+| `user_role_scope_management` | snapshot, risky-port audit |
+
+All four are **read** capabilities. No write capability is required for this toolkit.
+
+## Security notes
+
+- API key + secret stay only in `.env`, which `.gitignore` excludes from every commit.
+- Never paste keys into commit messages, code, screenshots, or chat history that is committed.
+- If a key is exposed (e.g. accidentally pushed): rotate it immediately in the CSW UI
+  (Platform → API Keys), remove from history (`git filter-repo` or BFG), and re-issue.
+- `CSW_VERIFY_SSL` stays `true`. The script also points Python at `certifi`'s CA bundle
+  automatically so verification works on macOS framework Python builds that ship with an
+  empty system trust store.
+- Customer engagement findings (cluster baselines, agent counts, enforcement state) belong
+  in the **per-customer repo**, not here.
+
+## Used by
+
+- Private, per-customer CSW POV engagement repos, each named `{Customer}-CSW-POV`.
+- Each engagement repo consumes these scripts and keeps its own tenant configuration, findings, and deliverables in isolation — no customer data lives here.
+
+## Provenance
+
+Extracted from an earlier per-customer POV engagement on 2026-05-14. The scripts contain no customer-specific data — all tenant configuration is read from `.env` at runtime — so they were relocated here for shared reuse and to enforce per-customer repo isolation.
