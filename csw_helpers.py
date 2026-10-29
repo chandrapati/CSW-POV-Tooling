@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Quick summary: Shared helper library (no CLI). Offset pagination, sensor
-fetch/normalize, field-alias resolution, record flattening, and safe filenames.
-Imported by the downloaders and report generators — not run directly.
+fetch/normalize, field-alias resolution, Kubernetes/orchestrator classification,
+record flattening, and safe filenames. Imported by the downloaders and report
+generators — not run directly.
 
 csw_helpers.py - Shared utilities for CSW POV Template scripts
 ==============================================================
@@ -163,6 +164,194 @@ KNOWN_FIELD_ALIASES: Dict[str, str] = {
     "user_orchestrator_Workload_Type": "user_orchestrator_Workload Type",
     "user_orchestrator_VM_Name": "user_orchestrator_VM Name",
 }
+
+
+# =============================================================================
+# Kubernetes / orchestrator classification
+# =============================================================================
+#
+# CSW annotates every orchestrated workload with a block of
+# ``user_orchestrator_system/*`` labels sourced from the Kubernetes / cloud
+# orchestrator connectors (EKS, AKS, GKE, OpenShift, vanilla k8s). These are
+# the authoritative, vendor-neutral signal that an endpoint is a container /
+# pod running under an orchestrator — far more reliable than hostname guessing.
+#
+# Key annotation fields (prefix ``user_orchestrator_system/``):
+#   orch_type        kubernetes | aws | azure | gcp | ...
+#   cluster_name     e.g. acme-gke-cluster, acme-openshift-prod-cluster
+#   namespace        k8s namespace of the pod
+#   pod_name         k8s pod name
+#   kubelet_version  node kubelet version
+#   workload_type    orchestrator-reported workload type
+
+ORCH_SYS_PREFIX = "user_orchestrator_system/"
+
+# orch_type values (lower-cased) that indicate a Kubernetes-family orchestrator.
+_K8S_ORCH_TYPES = {"kubernetes", "openshift", "k8s", "eks", "aks", "gke"}
+# Substrings in a cluster name that imply managed/vanilla Kubernetes.
+_K8S_CLUSTER_HINTS = ("k8s", "kube", "gke", "eks", "aks", "openshift", "ocp")
+# Hostname / platform hints for *nodes* (which often lack pod annotations).
+_K8S_NODE_HOST_HINTS = ("gke-", "aks-", "eks-", "openshift", "-k8s-", "kube")
+_K8S_NODE_PLATFORM_HINTS = ("coreos",)  # RHEL CoreOS == OpenShift node
+
+
+def _first(record: Dict[str, Any], *keys: str) -> Optional[Any]:
+    """Return the first non-empty value among ``keys`` in ``record``."""
+    if not isinstance(record, dict):
+        return None
+    for k in keys:
+        v = record.get(k)
+        if v not in (None, ""):
+            return v
+    return None
+
+
+def _orch_get(record: Dict[str, Any], key: str) -> Optional[Any]:
+    """Read ``user_orchestrator_system/<key>``, tolerating the alt underscore form."""
+    if not isinstance(record, dict):
+        return None
+    v = record.get(ORCH_SYS_PREFIX + key)
+    if v in (None, ""):
+        v = record.get("user_orchestrator_" + key)
+    return v if v not in (None, "") else None
+
+
+def managed_platform(cluster_name: Optional[str], orch_type: Optional[str] = None) -> Optional[str]:
+    """Best-effort managed-Kubernetes platform label from cluster name / orch_type.
+
+    Returns one of: ``OpenShift``, ``GKE``, ``EKS``, ``AKS``, ``Kubernetes``, or ``None``.
+    """
+    c = (cluster_name or "").lower()
+    o = (orch_type or "").lower()
+    if "openshift" in c or "ocp" in c:
+        return "OpenShift"
+    if "gke" in c or o == "gcp":
+        return "GKE"
+    if "eks" in c or o == "aws":
+        return "EKS"
+    if "aks" in c or o == "azure":
+        return "AKS"
+    if "k8s" in c or "kube" in c or o in _K8S_ORCH_TYPES:
+        return "Kubernetes"
+    return None
+
+
+def orchestrator_info(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract orchestrator / Kubernetes facts from a CSW inventory record.
+
+    Returns a dict with keys ``is_k8s`` (bool), ``orch_type``, ``cluster``,
+    ``namespace``, ``pod``, ``kubelet``, and ``provider`` (managed-platform
+    label). Vendor-neutral: works for EKS/AKS/GKE/OpenShift/vanilla k8s.
+
+    A record is treated as Kubernetes if it has a namespace, pod name, or
+    kubelet version (k8s-only fields), OR an orchestrator type in the k8s
+    family, OR a cluster name that looks like managed Kubernetes.
+    """
+    orch_type = _orch_get(record, "orch_type")
+    cluster   = _orch_get(record, "cluster_name")
+    namespace = _orch_get(record, "namespace")
+    pod       = _orch_get(record, "pod_name")
+    kubelet   = _orch_get(record, "kubelet_version")
+
+    ot = (orch_type or "").lower()
+    cl = (cluster or "").lower()
+    is_k8s = bool(
+        namespace or pod or kubelet
+        or ot in _K8S_ORCH_TYPES
+        or any(h in cl for h in _K8S_CLUSTER_HINTS)
+    )
+    return {
+        "is_k8s":    is_k8s,
+        "orch_type": orch_type,
+        "cluster":   cluster,
+        "namespace": namespace,
+        "pod":       pod,
+        "kubelet":   kubelet,
+        "provider":  managed_platform(cluster, orch_type),
+    }
+
+
+def is_kubernetes(record: Dict[str, Any]) -> bool:
+    """Convenience boolean wrapper around :func:`orchestrator_info`."""
+    return orchestrator_info(record)["is_k8s"]
+
+
+def is_k8s_node(sensor: Dict[str, Any]) -> bool:
+    """Heuristic: does this *sensor* (agent) run on a Kubernetes node?
+
+    Sensor records usually lack pod annotations, so this honors any
+    orchestrator annotations present, then falls back to hostname / platform
+    hints (CoreOS == OpenShift node; ``gke-`` / ``aks-`` / ``eks-`` prefixes).
+    """
+    if not isinstance(sensor, dict):
+        return False
+    if is_kubernetes(sensor):
+        return True
+    host = (_first(sensor, "host_name", "hostname") or "").lower()
+    platform = (_first(sensor, "platform", "os", "os_display_label") or "").lower()
+    if any(h in host for h in _K8S_NODE_HOST_HINTS):
+        return True
+    if any(p in platform for p in _K8S_NODE_PLATFORM_HINTS):
+        return True
+    return False
+
+
+def node_platform(sensor: Dict[str, Any]) -> Optional[str]:
+    """Managed-Kubernetes platform label for a node sensor (hostname/platform based)."""
+    info = orchestrator_info(sensor)
+    if info["provider"]:
+        return info["provider"]
+    host = (_first(sensor, "host_name", "hostname") or "").lower()
+    platform = (_first(sensor, "platform", "os", "os_display_label") or "").lower()
+    if "coreos" in platform or "openshift" in host:
+        return "OpenShift"
+    if host.startswith("gke-"):
+        return "GKE"
+    if host.startswith("eks-"):
+        return "EKS"
+    if host.startswith("aks-"):
+        return "AKS"
+    if any(h in host for h in ("k8s", "kube")):
+        return "Kubernetes"
+    return None
+
+
+def summarize_kubernetes(inventory: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
+    """Aggregate Kubernetes facts across an inventory list.
+
+    Returns a dict with ``k8s_item_count`` (int), ``pods`` (int), and
+    ``clusters`` / ``orch_types`` / ``namespaces`` / ``providers`` count maps.
+    """
+    from collections import Counter
+    clusters: "Counter[str]" = Counter()
+    orch: "Counter[str]" = Counter()
+    ns: "Counter[str]" = Counter()
+    prov: "Counter[str]" = Counter()
+    k8s = 0
+    pods = 0
+    for rec in inventory or []:
+        info = orchestrator_info(rec)
+        if not info["is_k8s"]:
+            continue
+        k8s += 1
+        if info["cluster"]:
+            clusters[info["cluster"]] += 1
+        if info["orch_type"]:
+            orch[info["orch_type"]] += 1
+        if info["namespace"]:
+            ns[info["namespace"]] += 1
+        if info["provider"]:
+            prov[info["provider"]] += 1
+        if info["pod"]:
+            pods += 1
+    return {
+        "k8s_item_count": k8s,
+        "pods": pods,
+        "clusters": dict(clusters),
+        "orch_types": dict(orch),
+        "namespaces": dict(ns),
+        "providers": dict(prov),
+    }
 
 
 # =============================================================================
@@ -531,6 +720,24 @@ if __name__ == "__main__":
     print("\nAGENT_TYPES sample:")
     print(f"  ENFORCER={AGENT_TYPES.ENFORCER}, "
           f"VISIBILITY={AGENT_TYPES.VISIBILITY}")
+
+    print("\nKubernetes classification:")
+    k8s_samples = [
+        {"user_orchestrator_system/orch_type": "kubernetes",
+         "user_orchestrator_system/cluster_name": "acme-gke-cluster",
+         "user_orchestrator_system/namespace": "acme-app",
+         "user_orchestrator_system/pod_name": "redis-cart-558f8d8d44-lwgkq"},
+        {"host_name": "acme-openshift-dev-worker-1", "platform": "RedHatEnterpriseCoreOSServer-4.18"},
+        {"host_name": "crm-app-db", "platform": "CentOS-7.9"},
+    ]
+    for s in k8s_samples:
+        info = orchestrator_info(s)
+        label = s.get("host_name") or info["pod"] or "?"
+        print(f"  {label:42s} is_k8s={info['is_k8s']!s:5s} "
+              f"node={is_k8s_node(s)!s:5s} provider={node_platform(s) or info['provider']}")
+    summ = summarize_kubernetes(k8s_samples)
+    print(f"  summarize_kubernetes -> items={summ['k8s_item_count']} "
+          f"pods={summ['pods']} providers={summ['providers']}")
 
     print("\nAll synchronous helpers passed. paginate() and "
           "build_sensor_map() require live API.")

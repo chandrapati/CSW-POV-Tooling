@@ -2,7 +2,8 @@
 """
 Quick summary: The deliverable. Rolls up the latest snapshot plus every companion
 artifact into a CISO-grade one-page HTML + Markdown with posture KPIs
-(visibility, enforcement, blast radius) and prioritized recommendations.
+(visibility, enforcement, blast radius), a Kubernetes/container footprint section,
+and prioritized recommendations.
 
 generate_executive_report.py — CSW POV Executive Summary
 =========================================================
@@ -385,6 +386,8 @@ def aggregate_metrics(snapshot: dict, companions: dict) -> dict:
     scopes     = snapshot.get("scopes", {}) or {}
     workspaces = snapshot.get("workspaces", {}) or {}
     flows      = snapshot.get("flows", {}) or {}
+    k8s        = snapshot.get("kubernetes") or {}
+    k8s_nodes  = sensors.get("k8s_nodes", {}) or {}
 
     total_agents   = int(sensors.get("total", 0) or 0)
     enforced_count = int(sensors.get("enforcement", {}).get("count", 0) or 0)
@@ -469,6 +472,14 @@ def aggregate_metrics(snapshot: dict, companions: dict) -> dict:
         "flow_rejected":    flow_rejected,
         "risky_port_count": risky_port_count,
         "risky_ports":      risky_ports_seen,
+        # Kubernetes / container workloads
+        "k8s_workloads":      int(k8s.get("k8s_item_count", 0) or 0),
+        "k8s_pods":           int(k8s.get("pods", 0) or 0),
+        "k8s_clusters":       k8s.get("clusters", {}) or {},
+        "k8s_namespaces":     k8s.get("namespaces", {}) or {},
+        "k8s_providers":      k8s.get("providers", {}) or {},
+        "k8s_node_count":     int(k8s_nodes.get("count", 0) or 0),
+        "k8s_node_platforms": k8s_nodes.get("by_platform", {}) or {},
         # Posture scores
         "blast_radius_score": blast_radius_score,
         "policy_maturity":    round(policy_maturity * 100, 1),
@@ -901,6 +912,8 @@ footer{{text-align:center;padding:2.5rem 1rem;font-size:.75rem;
 
   {flows_card_html}
 
+  {k8s_card_html}
+
   {sources_card_html}
 
 </div>
@@ -1045,6 +1058,15 @@ def render_html(metrics: dict, snapshot: dict, companions: dict,
         seg_rows.append(
             ["Policies in companion export",
              f"{m['policy_summary']['total_policies_in_export']:,}"]
+        )
+    if m.get("k8s_workloads"):
+        seg_rows.append(
+            ["Kubernetes workloads (orchestrated)",
+             f"{m['k8s_workloads']:,} across {len(m['k8s_clusters'])} cluster(s)"]
+        )
+    if m.get("k8s_node_count"):
+        seg_rows.append(
+            ["Kubernetes nodes (agent-instrumented)", str(m["k8s_node_count"])]
         )
     segmentation_table_html = html_table(["Indicator", "Value"], seg_rows)
 
@@ -1209,6 +1231,50 @@ def render_html(metrics: dict, snapshot: dict, companions: dict,
              f"<code>{path}</code>" if path
              else html_pill("not found", "gray")]
         )
+    # ── Kubernetes / container card (optional) ────────────────────────────
+    if m.get("k8s_workloads") or m.get("k8s_node_count"):
+        node_line = ""
+        if m.get("k8s_node_count"):
+            plats = ", ".join(f"{p} ({c})"
+                              for p, c in sorted(m["k8s_node_platforms"].items(), key=lambda x: -x[1]))
+            node_line = (
+                f'<p style="font-size:.88rem;color:var(--text2);margin-bottom:.75rem">'
+                f'<strong>{m["k8s_node_count"]}</strong> agent-instrumented Kubernetes nodes — {plats}.</p>'
+            )
+        inv_block = ""
+        if m.get("k8s_workloads"):
+            prov_rows = [[p, f"{c:,}"]
+                         for p, c in sorted(m["k8s_providers"].items(), key=lambda x: -x[1])]
+            clus_rows = [[f"<code>{c}</code>", f"{n:,}"]
+                         for c, n in sorted(m["k8s_clusters"].items(), key=lambda x: -x[1])]
+            ns_rows  = [[f"<code>{n}</code>", str(c)]
+                        for n, c in sorted(m["k8s_namespaces"].items(), key=lambda x: -x[1])[:10]]
+            inv_block = f"""
+      <p style="font-size:.88rem;color:var(--text2);margin-bottom:.75rem">
+        <strong>{m['k8s_workloads']:,}</strong> orchestrated workloads
+        (<strong>{m['k8s_pods']:,}</strong> pods) across
+        <strong>{len(m['k8s_clusters'])}</strong> clusters and
+        <strong>{len(m['k8s_namespaces'])}</strong> namespaces.
+      </p>
+      <div class="two-col">
+        <div>{html_table(["Platform", "Workloads"], prov_rows)}</div>
+        <div>{html_table(["Cluster", "Workloads"], clus_rows)}</div>
+      </div>
+      <div style="margin-top:1rem">{html_table(["Top Namespace", "Workloads"], ns_rows)}</div>"""
+        k8s_card_html = f"""
+  <div class="card">
+    <div class="card-header">
+      <div class="card-icon" style="background:#d1fae5">&#9768;</div>
+      <h2>Kubernetes / Container Footprint</h2>
+    </div>
+    <div class="card-body">
+      {node_line}
+      {inv_block}
+    </div>
+  </div>"""
+    else:
+        k8s_card_html = ""
+
     sources_card_html = f"""
   <div class="card">
     <div class="card-header">
@@ -1241,6 +1307,7 @@ def render_html(metrics: dict, snapshot: dict, companions: dict,
         recommendations_html=recommendations_html,
         vuln_card_html=vuln_card_html,
         flows_card_html=flows_card_html,
+        k8s_card_html=k8s_card_html,
         sources_card_html=sources_card_html,
     )
 
@@ -1296,6 +1363,11 @@ def render_markdown(metrics: dict, snapshot: dict, companions: dict,
                  f"({m['enforcing_ws']} enforcing) |")
     lines.append(f"| Total policies | {m['total_policies']} |")
     lines.append(f"| Insecure-cipher hosts | {m['insecure_hosts']} |")
+    if m.get("k8s_node_count"):
+        lines.append(f"| Kubernetes nodes (agents) | {m['k8s_node_count']} |")
+    if m.get("k8s_workloads"):
+        lines.append(f"| Kubernetes workloads | {m['k8s_workloads']:,} "
+                     f"({len(m['k8s_clusters'])} clusters) |")
     if m["vuln"]:
         v = m["vuln"]
         lines.append(f"| Critical CVEs | {v['by_severity']['CRITICAL']} |")
@@ -1333,6 +1405,25 @@ def render_markdown(metrics: dict, snapshot: dict, companions: dict,
     lines.append(f"| Healthy agents | {m['health_pct']:.0f}% |")
     lines.append(f"| Insecure-cipher hosts | {m['insecure_hosts']} |")
     lines.append("")
+
+    # Kubernetes / container footprint (optional)
+    if m.get("k8s_workloads") or m.get("k8s_node_count"):
+        lines.append("## Kubernetes / container footprint")
+        lines.append("")
+        if m.get("k8s_node_count"):
+            plats = ", ".join(f"{p} ({c})"
+                              for p, c in sorted(m["k8s_node_platforms"].items(), key=lambda x: -x[1]))
+            lines.append(f"- **{m['k8s_node_count']}** agent-instrumented Kubernetes nodes — {plats}")
+        if m.get("k8s_workloads"):
+            lines.append(f"- **{m['k8s_workloads']:,}** orchestrated workloads "
+                         f"(**{m['k8s_pods']:,}** pods) across **{len(m['k8s_clusters'])}** "
+                         f"cluster(s) and **{len(m['k8s_namespaces'])}** namespace(s)")
+            lines.append("")
+            lines.append("| Cluster | Workloads |")
+            lines.append("|---|---|")
+            for c, n in sorted(m["k8s_clusters"].items(), key=lambda x: -x[1]):
+                lines.append(f"| `{c}` | {n:,} |")
+        lines.append("")
 
     # Vulnerability section (optional)
     if m["vuln"]:

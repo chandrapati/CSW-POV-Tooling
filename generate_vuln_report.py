@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Quick summary: Pulls per-host CVE data, writes a per-CVE CSV (one row per CVE per
-host) and a host-level severity / CVM-risk rollup HTML, ranked by exploitability.
+host) and a host-level severity / CVM-risk rollup HTML, ranked by exploitability,
+with a Kubernetes/container-node badge on each host.
 
 generate_vuln_report.py — CSW Vulnerability Assessment Report
 --------------------------------------------------------------
@@ -144,6 +145,7 @@ def collect_all(sensors):
     """
     host_vulns = {}       # hostname → list of vuln dicts
     host_pkgs = {}        # hostname → list of package dicts
+    host_k8s = {}         # hostname → managed-k8s platform label (if a k8s node)
     cve_counter = Counter()       # cve_id → number of hosts affected
     severity_counter = Counter()  # severity string → total count
     cve_details = {}              # cve_id → full vuln dict (latest seen)
@@ -170,6 +172,8 @@ def collect_all(sensors):
 
         host_vulns[hostname] = vulns
         host_pkgs[hostname] = pkgs
+        if csw_helpers.is_k8s_node(sensor):
+            host_k8s[hostname] = csw_helpers.node_platform(sensor) or "Kubernetes"
 
         if vulns:
             hosts_with_vulns += 1
@@ -215,6 +219,7 @@ def collect_all(sensors):
         "cve_details": cve_details,
         "host_vulns": host_vulns,
         "host_pkgs": host_pkgs,
+        "host_k8s": host_k8s,
         "cvm": {
             "easily_exploitable": cvm_easily_exploitable,
             "malware_exploitable": cvm_malware_exploitable,
@@ -393,8 +398,13 @@ def render_html(stats, cluster, generated):
         top_score = max((v.get("v3_score") or v.get("v2_score") or 0) for v in vulns)
         exploitable = sum(1 for v in vulns if v.get("cvm_easily_exploitable"))
         pkg_count = len(s["host_pkgs"].get(hostname, []))
+        k8s_plat = s.get("host_k8s", {}).get(hostname)
+        plat_cell = (
+            f"<span style='background:#d1fae5;color:#065f46;padding:1px 7px;border-radius:10px;font-size:.72rem;font-weight:600'>&#9768; {k8s_plat}</span>"
+            if k8s_plat else "<span style='color:#94a3b8;font-size:.72rem'>VM</span>"
+        )
         host_rows += (
-            f"<tr><td><strong>{hostname}</strong></td>"
+            f"<tr><td><strong>{hostname}</strong></td><td>{plat_cell}</td>"
             f"<td>{vuln_count}</td><td>{crits}</td><td>{highs}</td>"
             f"<td>{top_score}</td><td>{exploitable}</td><td>{pkg_count}</td></tr>"
         )
@@ -573,7 +583,7 @@ footer strong {{ color:var(--text2) }}
 <div class="card full">
   <h2>Most Vulnerable Hosts</h2>
   <table>
-    <thead><tr><th>Hostname</th><th>CVEs</th><th>Critical</th><th>High</th><th>Top Score</th><th>Exploitable</th><th>Packages</th></tr></thead>
+    <thead><tr><th>Hostname</th><th>Platform</th><th>CVEs</th><th>Critical</th><th>High</th><th>Top Score</th><th>Exploitable</th><th>Packages</th></tr></thead>
     <tbody>{host_rows}</tbody>
   </table>
 </div>

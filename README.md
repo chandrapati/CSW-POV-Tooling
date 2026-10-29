@@ -41,15 +41,15 @@ Each script carries the same one-line **Quick summary** at the top of its file
 | Script | Quick summary |
 |---|---|
 | `csw_api.py` | Signed HMAC client for the CSW OpenAPI. Run any GET/POST from the CLI, or import `make_request()`. Handles auth, TLS CA bundle, timeout, and 429/5xx retries. Used by every other script. |
-| `csw_helpers.py` | Shared helper library (no CLI). Offset pagination, sensor fetch/normalize, field-alias resolution, record flattening, safe filenames. |
-| `count_agents.py` | Counts installed agents and breaks them down by type, OS/platform, version, and enforcement state. **Run first** to sanity-check connectivity. |
+| `csw_helpers.py` | Shared helper library (no CLI). Offset pagination, sensor fetch/normalize, field-alias resolution, **Kubernetes/orchestrator classification**, record flattening, safe filenames. |
+| `count_agents.py` | Counts installed agents and breaks them down by type, OS/platform, version, enforcement state, and **Kubernetes/container nodes** (GKE/EKS/AKS/OpenShift). **Run first** to sanity-check connectivity. |
 | `api_test_suite.py` | Probes every major OpenAPI endpoint group and writes a Markdown capability matrix showing what this API key / cluster can do. |
 
 **Collect (pull data from the tenant)**
 
 | Script | Quick summary |
 |---|---|
-| `cluster_snapshot.py` | Captures a full point-in-time snapshot (agents · scopes · workspaces · policies · 24h flow sample) as JSON + Markdown. Baseline for everything else. |
+| `cluster_snapshot.py` | Captures a full point-in-time snapshot (agents · scopes · workspaces · policies · 24h flow sample · **Kubernetes/container workloads**) as JSON + Markdown. Baseline for everything else. |
 | `cluster_delta.py` | Diffs two snapshots and reports additions, removals, and metric changes as Markdown. |
 | `download_flows.py` | Exports raw flow records between two scopes (configurable filter, NetFlow excluded by default) to CSV. |
 | `download_conversations.py` | Exports ADM-matched conversations for one/all workspaces to JSON, with a protocol/port summary. Auto-discovers workspaces. |
@@ -61,12 +61,12 @@ Each script carries the same one-line **Quick summary** at the top of its file
 | Script | Quick summary |
 |---|---|
 | `risky_port_audit.py` | Audit-only. Flags risky-port exposure — east-west, broad-scope allows, ADM rules, PCI CDE boundary — across all policies. JSON + HTML. |
-| `generate_vuln_report.py` | Per-host CVE pull → per-CVE CSV + host-level severity / CVM-risk rollup HTML, ranked by exploitability. |
+| `generate_vuln_report.py` | Per-host CVE pull → per-CVE CSV + host-level severity / CVM-risk rollup HTML, ranked by exploitability, with a **Kubernetes-node badge** per host. |
 | `generate_flow_analysis.py` | Deep flow-sample HTML — verdicts, protocols, TCP perf, TLS posture, risky ports, top scope/host/process pairs. |
 | `generate_forensics_report.py` | Forensics config + agent telemetry → HTML posture report with MITRE ATT&CK coverage and gap analysis. |
-| `generate_html_report.py` | Single snapshot → styled, self-contained HTML readout (stdlib only). |
+| `generate_html_report.py` | Single snapshot → styled, self-contained HTML readout (stdlib only), with a **Kubernetes/container-workloads card**. |
 | `generate_combined_report.py` | Baseline + current snapshots → one HTML report showing current state and the change delta. |
-| `generate_executive_report.py` | **The deliverable.** Rolls up the latest snapshot + every companion artifact into a CISO-grade one-page HTML + Markdown (visibility, enforcement, blast-radius KPIs + prioritized fixes). |
+| `generate_executive_report.py` | **The deliverable.** Rolls up the latest snapshot + every companion artifact into a CISO-grade one-page HTML + Markdown (visibility, enforcement, blast-radius KPIs + **Kubernetes/container footprint** + prioritized fixes). |
 | `query_long_lived_processes.py` | One flowsearch per day over a window → ranks persistent vs recurring vs transient processes per host (table + HTML + JSON). |
 | `parse_enforcer_timeline.py` | Offline log parser (no API creds). Enforcement timeline, on-host apply latency (ms), EFE delivery gaps (min) from `*_csw-logs` / `tet-enforcer.log`. See [docs/logs-check/](docs/logs-check/). |
 
@@ -128,6 +128,33 @@ Write findings to `{Customer}-CSW-POV/docs/enforcement-validation/`. Full workfl
 All scripts read `.env` for credentials, paginate the OpenAPI safely, and write outputs
 to `snapshots/` (raw JSON/CSV) and `reports/` (rendered HTML/MD). Use `--help` on any
 script for the full CLI.
+
+## Kubernetes / container visibility
+
+The toolkit surfaces orchestrated (Kubernetes / container) workloads as a
+first-class dimension, not just plain VMs. Detection is **vendor-neutral** and
+keys on CSW's `user_orchestrator_system/*` inventory annotations
+(`orch_type`, `cluster_name`, `namespace`, `pod_name`, `kubelet_version`), with
+hostname/platform fallbacks for nodes (CoreOS ⇒ OpenShift; `gke-`/`eks-`/`aks-`
+prefixes). It works across **EKS, AKS, GKE, OpenShift, and vanilla Kubernetes**.
+
+The shared classifier lives in `csw_helpers.py`:
+
+| Helper | Purpose |
+|---|---|
+| `orchestrator_info(record)` | Full facts: `is_k8s`, `orch_type`, `cluster`, `namespace`, `pod`, `kubelet`, `provider`. |
+| `is_kubernetes(record)` | True if the record is a k8s-managed workload (pod). |
+| `is_k8s_node(sensor)` | True if the agent runs on a Kubernetes node. |
+| `node_platform(sensor)` | Managed-platform label for a node (GKE/EKS/AKS/OpenShift/Kubernetes). |
+| `summarize_kubernetes(inventory)` | Cluster/namespace/provider rollup across an inventory list. |
+
+Where it shows up:
+
+- **`count_agents.py`** — a "Kubernetes / container nodes" count + per-platform breakdown.
+- **`cluster_snapshot.py`** — a `kubernetes` block in the JSON (clusters, namespaces, providers, pod count) and a dedicated Markdown section; node counts under `sensors.k8s_nodes`.
+- **`generate_html_report.py`** — a Kubernetes / container-workloads card.
+- **`generate_executive_report.py`** — a Kubernetes/container footprint section (HTML + Markdown) and segmentation-table rows.
+- **`generate_vuln_report.py`** — a Kubernetes-node badge on each host row.
 
 ## API key capabilities required
 

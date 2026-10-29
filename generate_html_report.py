@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Quick summary: Renders a single cluster_snapshot.py JSON into a styled,
-self-contained HTML readout (standard library only).
+self-contained HTML readout (standard library only), including a Kubernetes /
+container-workloads card when the snapshot carries orchestrator data.
 
 generate_html_report.py — CSW Snapshot → HTML Report Generator
 ---------------------------------------------------------------
@@ -172,6 +173,56 @@ def render(snap: dict) -> str:
         sev, desc = RISKY_PORTS[str(p)]
         colour = "red" if sev == "CRITICAL" else "amber"
         risky_alert_rows.append([f":{p}", badge(sev, colour), desc, risky_in_flows[p]])
+
+    # ── Kubernetes / container workloads card
+    k8s       = snap.get("kubernetes") or {}
+    k8s_nodes = sensors.get("k8s_nodes", {})
+    k8s_card  = ""
+    if (k8s and k8s.get("k8s_item_count")) or k8s_nodes.get("count"):
+        node_line = ""
+        if k8s_nodes.get("count"):
+            plat_badges = " ".join(
+                badge(f"{p}: {c}", "sky")
+                for p, c in sorted(k8s_nodes.get("by_platform", {}).items(), key=lambda x: -x[1])
+            )
+            node_line = (
+                f'<div style="margin-bottom:1rem;font-size:0.85rem;color:var(--text2)">'
+                f'<strong>{k8s_nodes["count"]}</strong> agent-instrumented Kubernetes nodes &nbsp; {plat_badges}</div>'
+            )
+        inv_block = ""
+        if k8s.get("k8s_item_count"):
+            prov_rows = [[p, badge(str(c), "blue")]
+                         for p, c in sorted(k8s.get("providers", {}).items(), key=lambda x: -x[1])]
+            clus_rows = [[f'<code>{c}</code>', n]
+                         for c, n in sorted(k8s.get("clusters", {}).items(), key=lambda x: -x[1])]
+            ns_rows   = [[f'<code>{n}</code>', c]
+                         for n, c in sorted(k8s.get("namespaces", {}).items(), key=lambda x: -x[1])[:15]]
+            inv_block = f'''
+        <div style="margin-bottom:1rem;font-size:0.85rem;color:var(--text2)">
+          <strong>{k8s["k8s_item_count"]}</strong> orchestrated workloads
+          (<strong>{k8s.get("pods", 0)}</strong> pods) across
+          <strong>{len(k8s.get("clusters", {}))}</strong> clusters and
+          <strong>{len(k8s.get("namespaces", {}))}</strong> namespaces
+        </div>
+        <div class="two-col">
+          <div>{table(["Platform", "Workloads"], prov_rows)}</div>
+          <div>{table(["Cluster", "Workloads"], clus_rows)}</div>
+        </div>
+        <div style="margin-top:1.2rem">
+          <div style="font-size:0.78rem;text-transform:uppercase;letter-spacing:.5px;color:var(--text2);margin-bottom:.6rem">Top Namespaces</div>
+          {table(["Namespace", "Workloads"], ns_rows)}
+        </div>'''
+        k8s_card = f'''
+  <div class="card">
+    <div class="card-header">
+      <div class="card-icon" style="background:#d1fae5">&#9768;</div>
+      <h2>Kubernetes / Container Workloads</h2>
+    </div>
+    <div class="card-body">
+      {node_line}
+      {inv_block}
+    </div>
+  </div>'''
 
     # ── scope tree as pre block
     scope_tree_html = f'<pre style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:1rem;font-size:0.8rem;overflow-x:auto;line-height:1.6">{scope_tree}</pre>'
@@ -375,6 +426,9 @@ footer strong{{color:var(--text2)}}
     </div>
   </div>
   '''}
+
+  <!-- Kubernetes / Container Workloads -->
+  {k8s_card}
 
   <!-- Scope Hierarchy -->
   <div class="card">

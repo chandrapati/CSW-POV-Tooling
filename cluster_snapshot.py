@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Quick summary: Captures a full point-in-time cluster snapshot (agents, scopes,
-workspaces, policies, 24h flow sample) as JSON + Markdown. The baseline for deltas
-and every downstream report.
+workspaces, policies, 24h flow sample, Kubernetes/container workloads) as JSON +
+Markdown. The baseline for deltas and every downstream report.
 
 cluster_snapshot.py — CSW Cluster Full Snapshot Tool
 
@@ -30,6 +30,8 @@ import os
 import subprocess
 import sys
 from datetime import datetime, timezone
+
+import csw_helpers
 
 # ──────────────────────────────────────────────────────────────
 # Helpers
@@ -141,6 +143,41 @@ def collect_inventory_sample(scope_name, limit=20):
     return []
 
 
+K8S_DIMENSIONS = [
+    "host_name", "ip",
+    "user_orchestrator_system/orch_type",
+    "user_orchestrator_system/cluster_name",
+    "user_orchestrator_system/namespace",
+    "user_orchestrator_system/pod_name",
+    "user_orchestrator_system/kubelet_version",
+]
+
+
+def collect_kubernetes(scope_name, limit=5000):
+    """Summarize Kubernetes / orchestrator-managed inventory (pods, clusters, namespaces).
+
+    Filters on a non-empty orchestrator type so only orchestrated workloads
+    come back, then classifies them with csw_helpers (vendor-neutral:
+    EKS/AKS/GKE/OpenShift/vanilla k8s). Returns the summarize_kubernetes()
+    dict with a ``sampled_items`` count, or None if nothing is found or the
+    inventory endpoint is unavailable.
+    """
+    body = {
+        "filter":     {"type": "ne", "field": "user_orchestrator_system/orch_type", "value": ""},
+        "scopeName":  scope_name,
+        "limit":      limit,
+        "dimensions": K8S_DIMENSIONS,
+    }
+    r = api("POST", "/openapi/v1/inventory/search", body)
+    data = r.get("data") or {}
+    results = data.get("results", []) if isinstance(data, dict) else []
+    if not results:
+        return None
+    summ = csw_helpers.summarize_kubernetes(results)
+    summ["sampled_items"] = len(results)
+    return summ if summ.get("k8s_item_count") else None
+
+
 def collect_flow_sample(scope_name, limit=20):
     """Pull a small flow sample for the last 24 hours.
     Uses epoch integer timestamps (required by SaaS clusters).
@@ -178,8 +215,15 @@ def analyse_sensors(sensors):
     forensics   = []
     health_ok   = 0
     health_warn = []
+    k8s_nodes   = []          # agents running on Kubernetes/container nodes
+    k8s_by_platform = {}      # GKE / EKS / AKS / OpenShift / Kubernetes
 
     for s in sensors:
+        if csw_helpers.is_k8s_node(s):
+            plat = csw_helpers.node_platform(s) or "Kubernetes"
+            k8s_nodes.append(s.get("host_name", ""))
+            k8s_by_platform[plat] = k8s_by_platform.get(plat, 0) + 1
+
         v = s.get("current_sw_version", "unknown")
         versions[v] = versions.get(v, 0) + 1
 
@@ -222,6 +266,7 @@ def analyse_sensors(sensors):
         "insecure":    insecure,
         "health_ok":   health_ok,
         "health_warn": health_warn,
+        "k8s_nodes":   {"count": len(k8s_nodes), "by_platform": k8s_by_platform, "hosts": k8s_nodes},
     }
 
 
@@ -342,6 +387,13 @@ def render_markdown(snapshot):
     ln(f"| Total Workspaces | {ws['total']} |")
     ln(f"| Total Policies | {ws['grand_policy_total']} |")
     ln(f"| Insecure Cipher Hosts | {len(sa['insecure'])} |")
+    _k8s_ov = snapshot.get("kubernetes") or {}
+    _k8s_nodes_ov = sa.get("k8s_nodes", {})
+    if _k8s_nodes_ov.get("count"):
+        ln(f"| Kubernetes Nodes (agents) | {_k8s_nodes_ov['count']} |")
+    if _k8s_ov.get("k8s_item_count"):
+        ln(f"| Kubernetes Workloads | {_k8s_ov['k8s_item_count']} "
+           f"({len(_k8s_ov.get('clusters', {}))} clusters) |")
     if fl.get("available"):
         ln(f"| Flow Sample (24h) | {fl['total_sample']} flows · {fl['permitted']} permitted · {fl['rejected']} rejected |")
     br()
@@ -393,6 +445,39 @@ def render_markdown(snapshot):
         for host in sa["enforcement"]["hosts"]:
             ln(f"- `{host}`")
         br()
+
+    # ── Kubernetes / Container Workloads ─────────────────────
+    k8s = snapshot.get("kubernetes")
+    k8s_nodes = sa.get("k8s_nodes", {})
+    if (k8s and k8s.get("k8s_item_count")) or k8s_nodes.get("count"):
+        h(2, "Kubernetes / Container Workloads")
+        if k8s_nodes.get("count"):
+            plats = ", ".join(f"{k} ({v})" for k, v in sorted(k8s_nodes["by_platform"].items()))
+            ln(f"**Agent-instrumented K8s nodes:** {k8s_nodes['count']} — {plats}")
+            br()
+        if k8s and k8s.get("k8s_item_count"):
+            ln(f"**Orchestrated workloads (inventory):** {k8s['k8s_item_count']} "
+               f"(pods: {k8s.get('pods', 0)}) across {len(k8s['clusters'])} cluster(s) "
+               f"and {len(k8s['namespaces'])} namespace(s).")
+            br()
+            if k8s.get("providers"):
+                ln("| Platform | Workloads |")
+                ln("|---|---|")
+                for p, c in sorted(k8s["providers"].items(), key=lambda kv: -kv[1]):
+                    ln(f"| {p} | {c} |")
+                br()
+            if k8s.get("clusters"):
+                ln("| Cluster | Workloads |")
+                ln("|---|---|")
+                for c, n in sorted(k8s["clusters"].items(), key=lambda kv: -kv[1]):
+                    ln(f"| `{c}` | {n} |")
+                br()
+            if k8s.get("namespaces"):
+                top_ns = sorted(k8s["namespaces"].items(), key=lambda kv: -kv[1])[:15]
+                ln(f"**Top namespaces** (of {len(k8s['namespaces'])}):")
+                for ns, n in top_ns:
+                    ln(f"- `{ns}` — {n} workload(s)")
+                br()
 
     # ── Scopes ──────────────────────────────────────────────
     h(2, "Scope Hierarchy")
@@ -532,6 +617,14 @@ def main():
     inv_sample = collect_inventory_sample(root_scope_name, limit=50)
     print(f" {len(inv_sample)} workloads sampled")
 
+    print("         Collecting Kubernetes/orchestrator inventory...", end="", flush=True)
+    k8s = collect_kubernetes(root_scope_name)
+    if k8s:
+        print(f" {k8s['k8s_item_count']} k8s workloads · "
+              f"{len(k8s['clusters'])} clusters · {len(k8s['namespaces'])} namespaces")
+    else:
+        print(" none found")
+
     fl_data = {}
     if not args.skip_flows:
         print("  [5/5] Collecting flow sample (24h)...", end="", flush=True)
@@ -560,6 +653,7 @@ def main():
         "scopes":         sc,
         "workspaces":     ws,
         "flows":          fl_data,
+        "kubernetes":     k8s,
         "_raw": {
             "sensors":    sensors,
             "scopes":     scopes,
@@ -592,6 +686,14 @@ def main():
     print(f"  Scopes          : {sc['total']}")
     print(f"  Workspaces      : {ws['total']}")
     print(f"  Total policies  : {ws['grand_policy_total']}")
+    k8s_nodes = sa.get("k8s_nodes", {})
+    if k8s_nodes.get("count"):
+        plats = ", ".join(f"{k}:{v}" for k, v in sorted(k8s_nodes["by_platform"].items()))
+        print(f"  K8s nodes       : {k8s_nodes['count']} ({plats})")
+    if k8s:
+        provs = ", ".join(f"{k}:{v}" for k, v in sorted(k8s['providers'].items())) or "n/a"
+        print(f"  K8s workloads   : {k8s['k8s_item_count']} · {len(k8s['clusters'])} clusters · "
+              f"{len(k8s['namespaces'])} namespaces [{provs}]")
     if fl_data.get("available"):
         print(f"  Flows (24h)     : {fl_data['total_sample']} sampled · {fl_data['permitted']} permitted · {fl_data['rejected']} rejected")
         risky = fl_data.get("risky_ports", {})

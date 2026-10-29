@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Quick summary: Counts installed agents and breaks them down by type, OS/platform,
-version, and enforcement state. Run this first to sanity-check connectivity.
+version, enforcement state, and Kubernetes/container nodes (GKE/EKS/AKS/OpenShift).
+Run this first to sanity-check connectivity.
 
 Count CSW (Tetration) software agents / sensors installed on the cluster.
 
@@ -28,6 +29,7 @@ import sys
 from collections import Counter
 
 import csw_api
+import csw_helpers
 
 
 SENSORS_PATH = "/openapi/v1/sensors"
@@ -100,6 +102,8 @@ def summarise(sensors):
     by_state = Counter()
     by_enforcement = Counter()
     by_data_plane = Counter()
+    by_k8s_platform = Counter()   # Kubernetes/container nodes by platform (GKE/EKS/AKS/OpenShift)
+    k8s_node_count = 0
     for s in sensors:
         # agent_type_str ("ENFORCER", "DEEP_VISIBILITY", ...) is the human label
         # surfaced by current CSW; fall back to the numeric enum for older builds.
@@ -113,6 +117,10 @@ def summarise(sensors):
         dp = s.get("data_plane_disabled")
         if dp is not None:
             by_data_plane["disabled" if dp else "active"] += 1
+        # Highlight agents running on Kubernetes / container nodes.
+        if csw_helpers.is_k8s_node(s):
+            k8s_node_count += 1
+            by_k8s_platform[csw_helpers.node_platform(s) or "Kubernetes"] += 1
     summary = {
         "total_agents_installed": len(sensors),
         "by_agent_type": dict(by_type.most_common()),
@@ -124,16 +132,22 @@ def summarise(sensors):
         summary["by_enforcement"] = dict(by_enforcement.most_common())
     if by_data_plane:
         summary["by_data_plane"] = dict(by_data_plane.most_common())
+    if k8s_node_count:
+        summary["kubernetes_nodes"] = k8s_node_count
+        summary["by_kubernetes_platform"] = dict(by_k8s_platform.most_common())
     return summary
 
 
 def print_human(summary):
     """Compact, terminal-friendly version of the summary."""
     print(f"Total agents installed: {summary['total_agents_installed']}")
+    if summary.get("kubernetes_nodes"):
+        print(f"Kubernetes / container nodes: {summary['kubernetes_nodes']}")
     sections = (
         ("By agent type",        "by_agent_type"),
         ("By enforcement mode",  "by_enforcement"),
         ("By data-plane status", "by_data_plane"),
+        ("By Kubernetes platform", "by_kubernetes_platform"),
         ("By state",             "by_state"),
         ("By platform / OS",     "by_platform"),
         ("By software version",  "by_software_version"),
