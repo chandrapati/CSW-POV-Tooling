@@ -122,9 +122,22 @@ All four are **read** capabilities. No write capability is required for this too
 - Never paste keys into commit messages, code, screenshots, or chat history that is committed.
 - If a key is exposed (e.g. accidentally pushed): rotate it immediately in the CSW UI
   (Platform → API Keys), remove from history (`git filter-repo` or BFG), and re-issue.
-- `CSW_VERIFY_SSL` stays `true`. The script also points Python at `certifi`'s CA bundle
-  automatically so verification works on macOS framework Python builds that ship with an
-  empty system trust store.
+- `CSW_VERIFY_SSL` stays `true`. The shared client (`csw_api.make_request`) points Python at
+  `certifi`'s CA bundle automatically so verification works on macOS framework Python builds
+  that ship with an empty system trust store — every script benefits, not just one.
+
+### Network resilience (shared client)
+
+All API calls go through `csw_api.make_request`, which now:
+
+- Enforces a per-request socket timeout (`CSW_API_TIMEOUT`, default `30`s) so a stalled
+  connection can't hang a long report run.
+- Retries HTTP `429` (throttling) and transient `5xx` (`502/503/504`) up to
+  `CSW_API_MAX_RETRIES` (default `3`), honoring any `Retry-After` header, otherwise using
+  exponential back-off with jitter. This aligns with the upcoming CSW **API DDoS throttling**
+  behavior — scripts degrade gracefully instead of erroring out.
+- Recomputes the HMAC timestamp + signature on every attempt (the signature is time-bound),
+  so retries stay valid.
 - Customer engagement findings (cluster baselines, agent counts, enforcement state) belong
   in the **per-customer repo**, not here.
 

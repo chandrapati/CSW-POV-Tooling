@@ -27,24 +27,6 @@ from collections import Counter
 import csw_api
 
 
-def _ensure_ca_bundle():
-    """Point urllib at certifi's CA bundle when the system trust store is empty.
-
-    macOS Python framework builds often ship without a populated cert store,
-    which makes valid public CAs (incl. CSW SaaS clusters) fail with
-    'self signed certificate in certificate chain'. We do NOT disable TLS
-    verification here; we just use a curated, modern CA list.
-    """
-    if os.environ.get("SSL_CERT_FILE"):
-        return
-    try:
-        import certifi  # type: ignore
-        os.environ["SSL_CERT_FILE"] = certifi.where()
-    except Exception:
-        # certifi not installed; leave defaults. We still verify TLS.
-        pass
-
-
 SENSORS_PATH = "/openapi/v1/sensors"
 
 
@@ -168,8 +150,7 @@ def main():
     parser.add_argument("--page", type=int, default=500, help="Page size for /sensors (default 500).")
     args = parser.parse_args()
 
-    csw_api._load_dotenv()
-    _ensure_ca_bundle()
+    csw_api._load_dotenv()  # TLS CA bundle is handled centrally in csw_api.make_request()
     sensors = fetch_all_sensors(page_size=args.page)
     summary = summarise(sensors)
 

@@ -25,11 +25,21 @@ import hashlib
 import hmac
 import json
 import os
+import random
 import sys
+import time
 import urllib.request
 import urllib.error
 import urllib.parse
 from datetime import datetime, timezone
+
+# Tunable network behaviour (override via environment).
+#   CSW_API_TIMEOUT     - per-request socket timeout in seconds (default 30)
+#   CSW_API_MAX_RETRIES - retries on throttling / transient errors (default 3)
+_TIMEOUT = float(os.environ.get("CSW_API_TIMEOUT", "30"))
+_MAX_RETRIES = int(os.environ.get("CSW_API_MAX_RETRIES", "3"))
+# Statuses worth retrying: 429 (throttle — see CSW "API DDoS throttling"), plus transient 5xx.
+_RETRY_STATUS = {429, 502, 503, 504}
 
 
 def _load_dotenv():
@@ -54,6 +64,41 @@ def _load_dotenv():
             val = val.strip().strip('"').strip("'")
             if key:
                 os.environ.setdefault(key, val)
+
+
+def _ensure_ca_bundle():
+    """Point urllib at certifi's CA bundle when the system trust store is empty.
+
+    macOS Python framework builds often ship without a populated cert store,
+    which makes valid public CAs (incl. CSW SaaS clusters) fail with
+    'self signed certificate in certificate chain'. We do NOT disable TLS
+    verification; we just use a curated, modern CA list. No-op if SSL_CERT_FILE
+    is already set or certifi is not installed (TLS still verified via defaults).
+
+    Lives in the shared client so every script that calls make_request() gets
+    reliable TLS, not just count_agents.py.
+    """
+    if os.environ.get("SSL_CERT_FILE"):
+        return
+    try:
+        import certifi  # type: ignore
+        os.environ["SSL_CERT_FILE"] = certifi.where()
+    except Exception:
+        pass
+
+
+def _retry_delay(attempt, retry_after=None):
+    """Seconds to wait before the next attempt.
+
+    Honors a server-provided ``Retry-After`` (integer seconds) when present;
+    otherwise exponential back-off (1, 2, 4, ... capped at 30s) with jitter.
+    """
+    if retry_after:
+        try:
+            return max(0.0, float(retry_after))
+        except (TypeError, ValueError):
+            pass
+    return min(2 ** (attempt - 1), 30) + random.uniform(0, 0.5)
 
 
 def get_config():
@@ -87,7 +132,14 @@ def compute_signature(secret, method, path, checksum, content_type, timestamp):
 
 
 def make_request(method, path, body=None, params=None):
-    """Execute an authenticated CSW API request and return a parsed result dict."""
+    """Execute an authenticated CSW API request and return a parsed result dict.
+
+    Resilience: enforces a socket timeout and retries throttling (HTTP 429) and
+    transient 5xx responses up to ``CSW_API_MAX_RETRIES`` times, honoring any
+    ``Retry-After`` header. Timestamp + HMAC signature are recomputed on every
+    attempt (the signature is time-bound), so retries stay valid.
+    """
+    _ensure_ca_bundle()
     base_url, api_key, api_secret, verify_ssl = get_config()
 
     if params:
@@ -96,7 +148,6 @@ def make_request(method, path, body=None, params=None):
 
     url          = f"{base_url}{path}"
     content_type = "application/json"
-    timestamp    = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+0000")
 
     body_bytes = b""
     if body:
@@ -107,24 +158,6 @@ def make_request(method, path, body=None, params=None):
 
     # Canonical checksum is the SHA-256 hex of the body for POST/PUT with a body; otherwise the empty string (including POST/PUT with no body).
     checksum = hashlib.sha256(body_bytes).hexdigest() if method.upper() in ("POST", "PUT") and body_bytes else ""
-    signature = compute_signature(api_secret, method.upper(), path, checksum, content_type, timestamp)
-
-    headers = {
-        "Content-Type":  content_type,
-        "Id":            api_key,
-        "Authorization": signature,
-        "Timestamp":     timestamp,
-        "User-Agent":    "csw-tme-toolkit/1.0",
-    }
-    if checksum:
-        headers["X-Tetration-Cksum"] = checksum
-
-    req = urllib.request.Request(
-        url,
-        data=body_bytes if body_bytes else None,
-        headers=headers,
-        method=method.upper(),
-    )
 
     if not verify_ssl:
         import ssl
@@ -134,25 +167,64 @@ def make_request(method, path, body=None, params=None):
         ctx.verify_mode    = ssl.CERT_NONE
     else:
         ctx = None
+    kwargs = {"context": ctx} if ctx else {}
 
-    try:
-        kwargs = {"context": ctx} if ctx else {}
-        with urllib.request.urlopen(req, **kwargs) as resp:
-            raw = resp.read().decode("utf-8")
-            try:
-                data = json.loads(raw)
-            except json.JSONDecodeError:
-                data = raw
-            return {"status": resp.status, "data": data}
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", errors="replace")
+    attempt = 0
+    while True:
+        attempt += 1
+        # Recompute per attempt — the signature is bound to this timestamp.
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+0000")
+        signature = compute_signature(api_secret, method.upper(), path, checksum, content_type, timestamp)
+        headers = {
+            "Content-Type":  content_type,
+            "Id":            api_key,
+            "Authorization": signature,
+            "Timestamp":     timestamp,
+            "User-Agent":    "csw-tme-toolkit/1.1",
+        }
+        if checksum:
+            headers["X-Tetration-Cksum"] = checksum
+
+        req = urllib.request.Request(
+            url,
+            data=body_bytes if body_bytes else None,
+            headers=headers,
+            method=method.upper(),
+        )
+
         try:
-            err_data = json.loads(raw)
-        except json.JSONDecodeError:
-            err_data = raw
-        return {"status": e.code, "error": str(e.reason), "data": err_data}
-    except urllib.error.URLError as e:
-        return {"status": 0, "error": f"Connection failed: {e.reason}", "data": None}
+            with urllib.request.urlopen(req, timeout=_TIMEOUT, **kwargs) as resp:
+                raw = resp.read().decode("utf-8")
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    data = raw
+                return {"status": resp.status, "data": data}
+        except urllib.error.HTTPError as e:
+            if e.code in _RETRY_STATUS and attempt <= _MAX_RETRIES:
+                retry_after = e.headers.get("Retry-After") if e.headers else None
+                delay = _retry_delay(attempt, retry_after)
+                sys.stderr.write(
+                    f"  csw_api: HTTP {e.code} on {path} — retry {attempt}/{_MAX_RETRIES} in {delay:.1f}s\n"
+                )
+                time.sleep(delay)
+                continue
+            raw = e.read().decode("utf-8", errors="replace")
+            try:
+                err_data = json.loads(raw)
+            except json.JSONDecodeError:
+                err_data = raw
+            return {"status": e.code, "error": str(e.reason), "data": err_data}
+        except urllib.error.URLError as e:
+            # Timeouts and connection resets are often transient — back off and retry.
+            if attempt <= _MAX_RETRIES:
+                delay = _retry_delay(attempt)
+                sys.stderr.write(
+                    f"  csw_api: connection error ({e.reason}) on {path} — retry {attempt}/{_MAX_RETRIES} in {delay:.1f}s\n"
+                )
+                time.sleep(delay)
+                continue
+            return {"status": 0, "error": f"Connection failed: {e.reason}", "data": None}
 
 
 def main():
