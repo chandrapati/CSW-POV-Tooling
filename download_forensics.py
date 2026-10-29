@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """
+Quick summary: Exports the cluster's forensic configuration (profiles, rules,
+intents, intent order) to JSON. Feeds generate_forensics_report.py.
+
 download_forensics.py — Download forensics configuration from the CSW cluster
 ------------------------------------------------------------------------------
 Queries the CSW forensics configuration API to retrieve the full forensic

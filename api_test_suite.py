@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """
+Quick summary: Probes every major OpenAPI endpoint group and writes a Markdown
+capability matrix showing what this API key / cluster can actually do.
+
 api_test_suite.py — CSW API Capability Test Suite
 
 Tests every major CSW OpenAPI v1 endpoint group to determine which capabilities

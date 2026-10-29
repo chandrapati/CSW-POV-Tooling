@@ -31,25 +31,49 @@ Customer-neutral, reusable tooling for Cisco Secure Workload (CSW / Tetration) p
    python3 csw_api.py GET /openapi/v1/sensors --limit 50 --offset 0
    ```
 
-## Files
+## Script catalog
+
+Each script carries the same one-line **Quick summary** at the top of its file
+(`head -20 <script>.py`), plus a full docstring and `--help`. Grouped by role:
+
+**Core / shared**
+
+| Script | Quick summary |
+|---|---|
+| `csw_api.py` | Signed HMAC client for the CSW OpenAPI. Run any GET/POST from the CLI, or import `make_request()`. Handles auth, TLS CA bundle, timeout, and 429/5xx retries. Used by every other script. |
+| `csw_helpers.py` | Shared helper library (no CLI). Offset pagination, sensor fetch/normalize, field-alias resolution, record flattening, safe filenames. |
+| `count_agents.py` | Counts installed agents and breaks them down by type, OS/platform, version, and enforcement state. **Run first** to sanity-check connectivity. |
+| `api_test_suite.py` | Probes every major OpenAPI endpoint group and writes a Markdown capability matrix showing what this API key / cluster can do. |
+
+**Collect (pull data from the tenant)**
+
+| Script | Quick summary |
+|---|---|
+| `cluster_snapshot.py` | Captures a full point-in-time snapshot (agents · scopes · workspaces · policies · 24h flow sample) as JSON + Markdown. Baseline for everything else. |
+| `cluster_delta.py` | Diffs two snapshots and reports additions, removals, and metric changes as Markdown. |
+| `download_flows.py` | Exports raw flow records between two scopes (configurable filter, NetFlow excluded by default) to CSV. |
+| `download_conversations.py` | Exports ADM-matched conversations for one/all workspaces to JSON, with a protocol/port summary. Auto-discovers workspaces. |
+| `download_forensics.py` | Exports the cluster's forensic configuration (profiles, rules, intents, intent order) to JSON. |
+| `download_policies.py` | Exports every workspace's policies plus per-scope workload inventory to JSON, and a Markdown + HTML policy-workload report. |
+
+**Analyze & report (render deliverables)**
+
+| Script | Quick summary |
+|---|---|
+| `risky_port_audit.py` | Audit-only. Flags risky-port exposure — east-west, broad-scope allows, ADM rules, PCI CDE boundary — across all policies. JSON + HTML. |
+| `generate_vuln_report.py` | Per-host CVE pull → per-CVE CSV + host-level severity / CVM-risk rollup HTML, ranked by exploitability. |
+| `generate_flow_analysis.py` | Deep flow-sample HTML — verdicts, protocols, TCP perf, TLS posture, risky ports, top scope/host/process pairs. |
+| `generate_forensics_report.py` | Forensics config + agent telemetry → HTML posture report with MITRE ATT&CK coverage and gap analysis. |
+| `generate_html_report.py` | Single snapshot → styled, self-contained HTML readout (stdlib only). |
+| `generate_combined_report.py` | Baseline + current snapshots → one HTML report showing current state and the change delta. |
+| `generate_executive_report.py` | **The deliverable.** Rolls up the latest snapshot + every companion artifact into a CISO-grade one-page HTML + Markdown (visibility, enforcement, blast-radius KPIs + prioritized fixes). |
+| `query_long_lived_processes.py` | One flowsearch per day over a window → ranks persistent vs recurring vs transient processes per host (table + HTML + JSON). |
+| `parse_enforcer_timeline.py` | Offline log parser (no API creds). Enforcement timeline, on-host apply latency (ms), EFE delivery gaps (min) from `*_csw-logs` / `tet-enforcer.log`. See [docs/logs-check/](docs/logs-check/). |
+
+**Supporting files**
 
 | File | Purpose |
 |---|---|
-| `csw_api.py` | HMAC-SHA256 signed client for the CSW OpenAPI (reads `.env`). |
-| `csw_helpers.py` | Shared utilities — offset pagination, sensor map (`uuid` / `ip` / `hostname`), safe-filename slugger. Imported by the report generators. |
-| `count_agents.py` | Pages `/openapi/v1/sensors` and summarises type / OS / version / enforcement. |
-| `api_test_suite.py` | Smoke-test suite for CSW OpenAPI endpoints — produces a Markdown capability matrix per API key. |
-| `cluster_snapshot.py` / `cluster_delta.py` | Snapshot the cluster state (agents · scopes · workspaces · policies · 24-h flow sample) and diff between snapshots. |
-| `download_flows.py` / `download_conversations.py` | Filtered raw-flow CSV export and ADM conversation export per workspace. |
-| `download_forensics.py` / `download_policies.py` | Forensics profiles + rules + intents export, and full per-workspace policy export with workload mapping. |
-| `risky_port_audit.py` | Audits the policies (from `download_policies.py`) for risky-port exposure on east-west paths and PCI-boundary violations. JSON findings + styled HTML report. |
-| `generate_vuln_report.py` | Queries each sensor's CVE list via `/openapi/v1/sensors/<uuid>/cves`, writes a flat CSV (one row per CVE per host) and a host-level severity rollup HTML. |
-| `generate_flow_analysis.py` | Deep flow analysis HTML — dimensionalises N flows by protocol, port (with risky-port badges), TCP performance, TLS posture, scope pairs, host pairs, processes. |
-| `generate_forensics_report.py` | Forensics report HTML from the JSON produced by `download_forensics.py`. |
-| `generate_html_report.py` / `generate_combined_report.py` | Snapshot → HTML readout and baseline+current side-by-side HTML with KPI deltas. |
-| `generate_executive_report.py` | **The deliverable.** Reads the latest snapshot, auto-discovers every companion artifact above, computes posture indicators (visibility coverage, enforcement coverage, policy maturity, blast-radius score), runs the recommendations engine, and writes CISO-grade HTML + Markdown. |
-| `query_long_lived_processes.py` | Multi-day process persistence analysis. Issues one flowsearch per day, aggregates process+host combinations, and identifies persistent vs recurring vs transient processes. |
-| `parse_enforcer_timeline.py` | Parses agent `*_csw-logs` / `tet-enforcer.log` — enforcement timeline, on-host apply latency (ms), EFE delivery gaps (min), test cutoff. No API creds. See [docs/logs-check/](docs/logs-check/). |
 | `framework-scope-design.md` / `framework-scope-design-updated.md` | Generic scope-design framework templates. |
 | `.env` | **Local only.** Tenant URL + API key + API secret. Gitignored. |
 | `.env.example` | Template showing the variables that must be set. |

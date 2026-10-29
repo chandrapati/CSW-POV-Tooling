@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 """
+Quick summary: Deep HTML analysis of a live flow sample — policy verdicts,
+protocols, TCP performance, TLS posture (weak-cipher flags), risky ports, and top
+scope/host/process pairs.
+
 generate_flow_analysis.py — CSW Deep Flow Analysis Report
 ----------------------------------------------------------
 Queries the CSW flow search API for a live sample of flows and generates

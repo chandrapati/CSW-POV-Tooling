@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 """
+Quick summary: Captures a full point-in-time cluster snapshot (agents, scopes,
+workspaces, policies, 24h flow sample) as JSON + Markdown. The baseline for deltas
+and every downstream report.
+
 cluster_snapshot.py — CSW Cluster Full Snapshot Tool
 
 Connects to a Cisco Secure Workload cluster and generates:

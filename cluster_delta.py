@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """
+Quick summary: Diffs two cluster_snapshot.py JSON snapshots and reports additions,
+removals, and metric changes as a Markdown change report.
+
 cluster_delta.py — CSW Cluster Change Detection Tool
 
 Compares two JSON snapshots produced by cluster_snapshot.py and generates

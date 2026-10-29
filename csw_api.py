@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 """
+Quick summary: Signed HMAC client for the CSW OpenAPI. Run any GET/POST from the
+CLI, or import make_request() in other scripts. Handles auth, TLS CA bundle,
+per-request timeout, and automatic 429/5xx retries. Every other script uses this.
+
 Cisco Secure Workload (CSW / Tetration) API client with HMAC digest authentication.
 
 Compatible with: CSW SaaS clusters and on-prem Tetration appliances.

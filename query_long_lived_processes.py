@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """
+Quick summary: Runs one flowsearch per day across a window and ranks persistent vs
+recurring vs transient processes per host (console table + HTML + optional JSON).
+
 query_long_lived_processes.py — Identify persistent processes across the CSW cluster
 -------------------------------------------------------------------------------------
 Queries the CSW flowsearch API across multiple 24-hour windows and identifies

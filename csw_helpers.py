@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 """
+Quick summary: Shared helper library (no CLI). Offset pagination, sensor
+fetch/normalize, field-alias resolution, record flattening, and safe filenames.
+Imported by the downloaders and report generators — not run directly.
+
 csw_helpers.py - Shared utilities for CSW POV Template scripts
 ==============================================================
 

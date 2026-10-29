@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 """
+Quick summary: Audit-only (never writes). Flags risky-port exposure across all
+policies — east-west between internal scopes, broad-scope allows, ADM-discovered
+rules, and PCI CDE-boundary violations. JSON findings + styled HTML.
+
 risky_port_audit.py — Risky-Port Policy Auditor for Cisco Secure Workload
 =========================================================================
 

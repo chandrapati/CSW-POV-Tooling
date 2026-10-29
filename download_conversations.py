@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """
+Quick summary: Exports ADM-matched conversations for one or all workspaces to JSON,
+with a protocol/port summary. Auto-discovers accessible workspaces if none given.
+
 download_conversations.py — Download all conversations from a CSW workspace
 ---------------------------------------------------------------------------
 Conversations are network flows that have been matched to ADM-generated

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """
+Quick summary: Pulls per-host CVE data, writes a per-CVE CSV (one row per CVE per
+host) and a host-level severity / CVM-risk rollup HTML, ranked by exploitability.
+
 generate_vuln_report.py — CSW Vulnerability Assessment Report
 --------------------------------------------------------------
 

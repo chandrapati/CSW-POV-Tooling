@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """
+Quick summary: Exports every workspace's policies plus per-scope workload inventory
+to JSON, and renders a Markdown + interactive HTML policy-workload report.
+
 download_policies.py — CSW Policy & Workload Downloader
 --------------------------------------------------------
 Downloads all policies from every workspace in the CSW cluster,

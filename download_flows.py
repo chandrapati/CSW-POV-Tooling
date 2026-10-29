@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """
+Quick summary: Exports raw flow records between two scopes (configurable
+consumer/provider filter, NetFlow excluded by default) to CSV via flowsearch.
+
 download_flows.py — Download filtered flow data from any CSW cluster
 ----------------------------------------------------------------------
 Queries the CSW flowsearch API with a configurable scope-based filter

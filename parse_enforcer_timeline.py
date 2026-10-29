@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Extract CSW enforcement timeline from tet-enforcer.log.
+"""Quick summary: Offline log parser (no API creds). Extracts the enforcement
+timeline, on-host apply latency (ms), and EFE delivery gaps (min) from agent
+*_csw-logs bundles / tet-enforcer.log.
+
+Extract CSW enforcement timeline from tet-enforcer.log.
 
 Supports log timestamp formats:
   - glog:  I0529 22:51:42.393419  (MMDD + time; year from bundle mtime or --year)

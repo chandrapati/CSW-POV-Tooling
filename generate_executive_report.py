@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 """
+Quick summary: The deliverable. Rolls up the latest snapshot plus every companion
+artifact into a CISO-grade one-page HTML + Markdown with posture KPIs
+(visibility, enforcement, blast radius) and prioritized recommendations.
+
 generate_executive_report.py — CSW POV Executive Summary
 =========================================================
 

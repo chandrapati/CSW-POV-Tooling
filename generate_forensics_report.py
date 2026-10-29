@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """
+Quick summary: Turns forensics config + agent telemetry into an HTML posture report
+with MITRE ATT&CK coverage, kill-chain mapping, and gap analysis.
+
 generate_forensics_report.py — CSW Forensics Posture Assessment Report
 -----------------------------------------------------------------------
 Combines forensics configuration data with live agent telemetry to produce

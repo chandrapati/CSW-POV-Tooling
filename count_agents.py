@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """
+Quick summary: Counts installed agents and breaks them down by type, OS/platform,
+version, and enforcement state. Run this first to sanity-check connectivity.
+
 Count CSW (Tetration) software agents / sensors installed on the cluster.
 
 Reads credentials from `.env` next to this script (CSW_API_URL, CSW_API_KEY,

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """
+Quick summary: Renders baseline + current snapshots into one self-contained HTML
+report showing current cluster state and the change delta side by side.
+
 generate_combined_report.py — CSW Snapshot + Delta → Combined HTML Report
 --------------------------------------------------------------------------
 Reads two JSON snapshots (baseline + current) and generates a single

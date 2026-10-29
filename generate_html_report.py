@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """
+Quick summary: Renders a single cluster_snapshot.py JSON into a styled,
+self-contained HTML readout (standard library only).
+
 generate_html_report.py — CSW Snapshot → HTML Report Generator
 ---------------------------------------------------------------
 Reads a JSON snapshot produced by cluster_snapshot.py and generates
